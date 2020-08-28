@@ -1,11 +1,12 @@
 import numpy as np
+import multiprocessing as mp
+import time
 import model
 
 dtE = model.parameters.dtE
 dtI = model.parameters.dtI
 NSteps = model.parameters.NSteps
 NTraj = model.parameters.NTraj
-NGrid = model.parameters.NGrid
 NStates = model.parameters.NStates
 M = model.parameters.M
 
@@ -71,53 +72,57 @@ def VelVerF(R, P, qF, qB, pF, pB, dtI, dtE=dtI/20, M=1): # Ionic position, ionic
     v += 0.5 * (F1 + F2) * dtI / M
     return R, v*M, qF, qB, pF, pB
 
-def getPopulation(qF, qB, pF, pB, qF0, qB0, pF0, pB0, step):
+def getPopulation(qF, qB, pF, pB, qF0, qB0, pF0, pB0):
     #print (step/NSteps * 100, "%")
     rho = np.zeros(( len(qF), len(qF) ), dtype=complex) # Define density matrix
     rho0 = (qF0 - 1j*pF0) * (qB0 + 1j*pB0)
-    #file01.write(str(step))
-    #file03.write(str(step))
     for i in range(len(qF)):
        for j in range(len(qF)):
           rho[i,j] = 0.25 * (qF[i] + 1j*pF[i]) * (qB[j] - 1j*pB[j]) * rho0
-          """ 
-          if (j >= i and i != j):
-              rho[i,j] = 0.25 * (qF[i] + 1j*pF[i]) * (qB[j] - 1j*pB[j]) * rho0
-              file01.write("\t" + str(rho[i,j].real))
-              if (i == j):
-                file03.write("\t" + str(rho[i,j].real))
-              if (i == j and i == NStates-1):
-                file03.write("\t" + str(np.sum(rho[i,i].real for i in range(len(rho)))) + "\n")
-                file01.write("\n")
-          """
     return rho
+
+def RunIterations(n):
+    #print (n)
+    #for itraj in range(int(NTraj/Ncpus)):
+    #print (itraj, NTraj/Ncpus)
+    #print (rho_ensemble[0,0,0].real)
+    rho_dum = np.zeros((NStates,NStates,NSteps), dtype=complex)
+    R,P = model.initR()
+    qF, qB, pF, pB = initMapping(NStates,initState) # Call function to initialize fictitious oscillators according to focused ("Default") or according to gaussian random distribution
+    qF0, qB0, pF0, pB0 = qF[initState], qB[initState], pF[initState], pB[initState] # Set initial values of fictitious oscillator variables for future use
+    for i in range(NSteps): # One trajectory
+        if (i % 1 == 0):
+            rho_current = getPopulation(qF, qB, pF, pB, qF0, qB0, pF0, pB0)
+            rho_dum[:,:,i] = rho_current
+        R, P, qF, qB, pF, pB = VelVerF(R, P, qF, qB, pF, pB, dtI, dtE, M)
+    return rho_dum
 
 
 ## Start Main Program
 
-#VMat = model.HelTwoLevel() # Get interaction Hamiltonian from model file
-#VMat = model.HelEqualEnergyManifold(2) # NEW EXPERIMENT ~BMW
-#VMat = model.HelMarcusTheory(NGrid) # Marcus theory -- Two Parabolas
+initState = 0 # Choose (arbitrarily???) the initial state of the particle population.
 
-initState = 0 # Choose (arbitrarily???) the initial state of the particle population. To see "relaxation" of particle population, should be high-energy state in VMat.
-
-file01 = open("output_rho.txt","w") # Density natrix: Step, 11, 12, 13, 14, 22, 23, 24, 33, 34, 44, or similar for upper triangle of NxN matrix, SUM_OF_DIAGS
-file03 = open("output_rho_diags.txt","w")
-#file02 = open("output_map.txt","w") # Fictitious Oscillator Motion (Use for sanity check): Step, qF[0], PF
-
+Ncpus = 24
+#Ncpus = mp.cpu_count() # Gives wrong number of CPUs
 rho_ensemble = np.zeros((NStates,NStates,NSteps), dtype=complex)
-for itraj in range(NTraj): # Ensemble
-    R,P = model.initR()
-    qF, qB, pF, pB = initMapping(NStates,initState) # Call function to initialize fictitious oscillators according to focused ("Default") or according to gaussian random distribution
-    qF0, qB0, pF0, pB0 = qF[initState], qB[initState], pF[initState], pB[initState] # Set initial values of fictitious oscillator variables for future use
-    print (itraj)
-    for i in range(NSteps): # One trajectory
-        if (i % 1 == 0):
-            rho_current = getPopulation(qF, qB, pF, pB, qF0, qB0, pF0, pB0, i)
-            rho_ensemble[:,:,i] += rho_current
-        R, P, qF, qB, pF, pB = VelVerF(R, P, qF, qB, pF, pB, dtI, dtE, M)
+print (f"There will be {Ncpus} cores with {NTraj} trajectories.")
 
-    #file02.close()
+start = time.time()
+
+runList = np.arange(NTraj)
+with mp.Pool(processes=Ncpus) as pool:
+    result = pool.map(RunIterations,runList)
+    #print (f"Total Jobs= {NTraj}, Jobs Per CPU= {NrunsCPU}, Output Shape = {np.shape(result)}, Job IDs = {runList}")
+    for i in range(len(runList)):
+        for j in range(NStates):
+            for k in range(NStates):
+                for l in range(NSteps):
+                    rho_ensemble[j,k,l] += result[i][j][k][l]
+    print (f"Initial Populations: {rho_ensemble[0,0,0].real} ")
+
+stop = time.time()
+print (f"Total Time: {stop - start}")
+
 
 file05 = open("output_new_rho.txt","w")
 for t in range(NSteps):
@@ -126,14 +131,6 @@ for t in range(NSteps):
         file05.write(str(rho_ensemble[i,i,t].real / NTraj) + "\t")
     file05.write("\n")
 file05.close()
-
-
-
-
-## OLD CODE: ##   
-#file01.write( str(i) + "\t" + "\t".join(rho_current.flatten().real.astype("str")) + "\t" + str(np.sum(rho_current[i,i].real for i in range(len(rho_current)))) + "\n")
-#file02.write( str(i) + "\t" + str(qF[0]) + "\t" + str(pF[0]) + + "\t" + str(qB[0]) + "\t" + str(pB[0]) + "\n")
-
 
 
 

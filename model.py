@@ -1,12 +1,10 @@
 import numpy as np
-from scipy.linalg import toeplitz
 
 class parameters():
    NSteps = 10**3 #int(2*10**6)
-   NTraj = 10**2
+   NTraj = 10**6
    dtI = 1
    dtE = dtI/20
-   NGrid = 100
    NStates = 2
    M = 2000
 
